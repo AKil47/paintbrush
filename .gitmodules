@@ -1,0 +1,8 @@
+[submodule "ref/canvas"]
+	path = ref/canvas
+	url = git@github.com:instructure/canvas-lms.git
+	branch = master
+[submodule "ref/canvas_android"]
+	path = ref/canvas_android
+	url = git@github.com:instructure/canvas-android.git
+	branch = master
