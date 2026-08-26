@@ -2,6 +2,7 @@ mod announcement;
 mod assignment;
 mod auth;
 mod course;
+mod page;
 mod profile;
 mod whoami;
 
@@ -63,6 +64,15 @@ enum Commands {
     Announcement {
         #[command(subcommand)]
         command: AnnouncementCommands,
+    },
+    /// Commands for a Canvas page, addressed by its full URL — e.g. a quiz,
+    /// wiki page, or syllabus. Unlike other resources, a page isn't looked up
+    /// by numeric ID; you address it with the URL you'd open in a browser.
+    Page {
+        /// Full Canvas URL of the page, e.g. https://gatech.instructure.com/courses/1234/quizzes/5678
+        url: String,
+        #[command(subcommand)]
+        command: PageCommands,
     },
     /// Manage stored login profiles (add profiles via `paintbrush login`).
     Profile {
@@ -136,6 +146,24 @@ enum AnnouncementCommands {
 }
 
 #[derive(Subcommand)]
+enum PageCommands {
+    /// Print the page's rendered HTML, or open it in the browser if `--web`
+    /// is set, for the selected profile.
+    ///
+    /// Printing goes through Canvas's web session rather than `/api/v1` —
+    /// needed for content (e.g. quizzes) that Canvas only serves as rendered
+    /// HTML. Reuses a stored session cookie when possible; otherwise (first
+    /// use, or once Canvas no longer honors it) transparently establishes a
+    /// fresh one via Canvas's `session_token` endpoint and stores it for next
+    /// time.
+    View {
+        /// Open the page in your browser instead of printing its HTML.
+        #[arg(long)]
+        web: bool,
+    },
+}
+
+#[derive(Subcommand)]
 enum ProfileCommands {
     /// List configured profiles; `*` marks the default.
     List,
@@ -171,6 +199,9 @@ fn main() {
             AnnouncementCommands::View { id, scope, web } => {
                 announcement::view(selected_profile, scope.course, id, web)
             }
+        },
+        Commands::Page { url, command } => match command {
+            PageCommands::View { web } => page::view(selected_profile, &url, web),
         },
         Commands::Profile { command } => match command {
             ProfileCommands::List => profile::list(),

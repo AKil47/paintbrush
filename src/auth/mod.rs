@@ -139,6 +139,105 @@ pub fn ensure_valid_token(profile: &str) -> Result<Session> {
     })
 }
 
+/// Fetches the rendered HTML at `target_url` (which must be on the
+/// profile's Canvas domain) as an authenticated web session, not a plain
+/// `/api/v1` call — needed for content (e.g. quizzes) that Canvas only
+/// serves as rendered HTML.
+///
+/// Reuses `profile`'s stored session cookies when they're still valid. If
+/// there are none yet, or Canvas no longer honors them (detected by the
+/// response landing off-domain, e.g. redirected to an SSO login page), a
+/// fresh session is minted via Canvas's `/login/session_token` endpoint
+/// (exchanging the OAuth access token for a one-time, 30-second-lived
+/// token that redeems into a real session) and the resulting cookies are
+/// persisted back to the profile for next time.
+pub fn fetch_html(profile: &str, target_url: &str) -> Result<String> {
+    let session = ensure_valid_token(profile)?;
+
+    let cookie_store = load_cookie_store(profile)?;
+    let agent = ureq::AgentBuilder::new()
+        .cookie_store(cookie_store)
+        .redirects(10)
+        .build();
+
+    if let Some(html) = try_fetch(&agent, target_url, &session.domain)? {
+        save_cookie_store(profile, &agent)?;
+        return Ok(html);
+    }
+
+    establish_web_session(&agent, &session, target_url)?;
+
+    let html = try_fetch(&agent, target_url, &session.domain)?.ok_or_else(|| {
+        anyhow::anyhow!("still redirected off {} after establishing a session", session.domain)
+    })?;
+    save_cookie_store(profile, &agent)?;
+    Ok(html)
+}
+
+/// `GET`s `target_url`, returning its body only if we ended up authenticated
+/// (the final URL, after redirects, is still on `domain` — an SSO/login
+/// bounce lands elsewhere).
+fn try_fetch(agent: &ureq::Agent, target_url: &str, domain: &str) -> Result<Option<String>> {
+    let resp = agent
+        .get(target_url)
+        .call()
+        .context("request to the target URL failed")?;
+    let landed_on_domain = resp
+        .get_url()
+        .parse::<oauth2::url::Url>()
+        .ok()
+        .and_then(|u| u.host_str().map(|h| h == domain))
+        .unwrap_or(false);
+    let body = resp
+        .into_string()
+        .context("response body wasn't valid UTF-8")?;
+    Ok(landed_on_domain.then_some(body))
+}
+
+/// Mints a fresh, one-time `session_token` from the OAuth access token and
+/// redeems it against `agent`'s cookie jar, establishing a real Canvas web
+/// session good for `target_url` (and the rest of the domain).
+fn establish_web_session(agent: &ureq::Agent, session: &Session, target_url: &str) -> Result<()> {
+    #[derive(serde::Deserialize)]
+    struct AuthedSession {
+        session_url: String,
+    }
+
+    let authed: AuthedSession = agent
+        .get(&format!("https://{}/login/session_token", session.domain))
+        .set("Authorization", &format!("Bearer {}", session.access_token))
+        .query("return_to", target_url)
+        .call()
+        .context("session_token request failed")?
+        .into_json()
+        .context("unexpected response from the session_token endpoint")?;
+
+    agent
+        .get(&authed.session_url)
+        .call()
+        .context("failed to redeem the session_token")?;
+    Ok(())
+}
+
+fn load_cookie_store(profile: &str) -> Result<cookie_store::CookieStore> {
+    match store::load_cookies(profile)? {
+        // Canvas's session cookie is non-persistent (no Expires attribute) —
+        // `load_all` (paired with `save_incl_expired_and_nonpersistent` below)
+        // is what keeps it around across separate CLI invocations.
+        Some(json) => cookie_store::serde::json::load_all(json.as_bytes())
+            .map_err(|e| anyhow::anyhow!("stored cookies are corrupt ({e}); run `paintbrush login` again")),
+        None => Ok(cookie_store::CookieStore::default()),
+    }
+}
+
+fn save_cookie_store(profile: &str, agent: &ureq::Agent) -> Result<()> {
+    let mut buf = Vec::new();
+    cookie_store::serde::json::save_incl_expired_and_nonpersistent(&agent.cookie_store(), &mut buf)
+        .map_err(|e| anyhow::anyhow!("failed to serialize session cookies: {e}"))?;
+    let json = String::from_utf8(buf).context("session cookies serialized as non-UTF8")?;
+    store::save_cookies(profile, &json)
+}
+
 /// Deletes any stored credentials for `profile`. A no-op if none exist.
 pub fn forget(profile: &str) -> Result<()> {
     store::delete(profile)
