@@ -12,20 +12,30 @@ use store::StoredCredentials;
 
 const TOKEN_EXPIRY_SKEW: Duration = Duration::from_secs(60);
 
+/// A resolved, ready-to-use Canvas session: the domain to hit and a valid
+/// bearer token for it.
+pub struct Session {
+    pub domain: String,
+    pub access_token: String,
+}
+
 fn normalize_domain(domain: &str) -> &str {
     domain
         .trim_start_matches("https://")
         .trim_start_matches("http://")
 }
 
-fn login_hint(domain: &str) -> String {
-    format!("run `paintbrush login --domain {domain}`")
+fn login_hint(profile: &str) -> String {
+    format!("run `paintbrush login --profile {profile} --domain <domain>`")
 }
 
 /// Logs in to `domain` via browser OAuth and stores the resulting
-/// credentials for future commands.
-pub fn login(domain: &str) -> Result<()> {
+/// credentials under `profile` (or under the domain itself, if no profile
+/// name is given). Registers the profile, making it the default if it's the
+/// first one ever created.
+pub fn login(profile: Option<&str>, domain: &str) -> Result<()> {
     let domain = normalize_domain(domain);
+    let profile = profile.unwrap_or(domain);
 
     let verify = oauth::mobile_verify(domain)?;
     let client = oauth::build_client(&verify, domain)?;
@@ -48,19 +58,22 @@ pub fn login(domain: &str) -> Result<()> {
     let code = code.trim().to_string();
 
     let token = oauth::exchange_code(&client, code)?;
-    save_token_response(domain, &verify, &token)?;
+    save_token_response(profile, domain, &verify, &token)?;
+    crate::profile::register(profile)?;
 
-    println!("Logged in to {domain}.");
+    println!("Logged in to {domain} as profile '{profile}'.");
     Ok(())
 }
 
-/// Returns a valid access token for `domain`, refreshing the stored token if
-/// it has expired. This is the entry point Canvas API commands call to get a
-/// usable token.
-pub fn ensure_valid_token(domain: &str) -> Result<String> {
-    let domain = normalize_domain(domain);
-    let stored = store::load(domain)?.ok_or_else(|| {
-        anyhow::anyhow!("no stored credentials for {domain}; {}", login_hint(domain))
+/// Returns a valid session for `profile`, refreshing the stored token if it
+/// has expired. This is the entry point Canvas API commands call to get a
+/// usable domain + token.
+pub fn ensure_valid_token(profile: &str) -> Result<Session> {
+    let stored = store::load(profile)?.ok_or_else(|| {
+        anyhow::anyhow!(
+            "no stored credentials for profile '{profile}'; {}",
+            login_hint(profile)
+        )
     })?;
 
     let now = SystemTime::now()
@@ -72,9 +85,17 @@ pub fn ensure_valid_token(domain: &str) -> Result<String> {
         // No known expiry (observed for tokens from the borrowed Android
         // client) — nothing to proactively refresh against; a future
         // caller hitting a 401 is the only signal that this needs renewing.
-        None => return Ok(stored.access_token),
+        None => {
+            return Ok(Session {
+                domain: stored.domain,
+                access_token: stored.access_token,
+            });
+        }
         Some(expires_at) if expires_at > now + TOKEN_EXPIRY_SKEW.as_secs() => {
-            return Ok(stored.access_token);
+            return Ok(Session {
+                domain: stored.domain,
+                access_token: stored.access_token,
+            });
         }
         Some(_) => {}
     }
@@ -84,10 +105,14 @@ pub fn ensure_valid_token(domain: &str) -> Result<String> {
         client_secret: stored.client_secret.clone(),
         protocol: stored.protocol.clone(),
     };
-    let client = oauth::build_client(&verify, domain)?;
+    let client = oauth::build_client(&verify, &stored.domain)?;
 
-    let token = oauth::exchange_refresh(&client, stored.refresh_token.clone())
-        .map_err(|_| anyhow::anyhow!("failed to refresh your stored credentials; {}", login_hint(domain)))?;
+    let token = oauth::exchange_refresh(&client, stored.refresh_token.clone()).map_err(|_| {
+        anyhow::anyhow!(
+            "failed to refresh your stored credentials; {}",
+            login_hint(profile)
+        )
+    })?;
 
     let refresh_token = token
         .refresh_token()
@@ -96,8 +121,9 @@ pub fn ensure_valid_token(domain: &str) -> Result<String> {
     let access_token = token.access_token().secret().clone();
 
     store::save(
-        domain,
+        profile,
         &StoredCredentials {
+            domain: stored.domain.clone(),
             protocol: stored.protocol,
             client_id: stored.client_id,
             client_secret: stored.client_secret,
@@ -107,10 +133,24 @@ pub fn ensure_valid_token(domain: &str) -> Result<String> {
         },
     )?;
 
-    Ok(access_token)
+    Ok(Session {
+        domain: stored.domain,
+        access_token,
+    })
+}
+
+/// Deletes any stored credentials for `profile`. A no-op if none exist.
+pub fn forget(profile: &str) -> Result<()> {
+    store::delete(profile)
+}
+
+/// The domain a profile is logged into, if it has stored credentials.
+pub fn domain_for(profile: &str) -> Result<Option<String>> {
+    Ok(store::load(profile)?.map(|c| c.domain))
 }
 
 fn save_token_response(
+    profile: &str,
     domain: &str,
     verify: &MobileVerifyResponse,
     token: &oauth2::basic::BasicTokenResponse,
@@ -122,8 +162,9 @@ fn save_token_response(
         .clone();
 
     store::save(
-        domain,
+        profile,
         &StoredCredentials {
+            domain: domain.to_string(),
             protocol: verify.protocol.clone(),
             client_id: verify.client_id.clone(),
             client_secret: verify.client_secret.clone(),

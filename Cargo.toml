@@ -12,3 +12,4 @@ open = "5.4"
 keyring = { version = "3.6", features = ["windows-native", "apple-native", "sync-secret-service"] }
 anyhow = "1.0"
 oauth2 = { version = "5", default-features = false, features = ["ureq"] }
+directories = "6.0"

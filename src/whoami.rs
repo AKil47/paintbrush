@@ -1,7 +1,7 @@
 use anyhow::{Context, Result};
 use serde::Deserialize;
 
-use crate::auth;
+use crate::{auth, profile};
 
 #[derive(Deserialize)]
 struct User {
@@ -9,13 +9,14 @@ struct User {
     name: String,
 }
 
-/// Fetches and prints the logged-in user for `domain`, proving the stored
-/// token actually works against the Canvas API.
-pub fn whoami(domain: &str) -> Result<()> {
-    let token = auth::ensure_valid_token(domain)?;
+/// Fetches and prints the logged-in user for `profile_arg` (or the default
+/// profile), proving the stored token actually works against the Canvas API.
+pub fn whoami(profile_arg: Option<&str>) -> Result<()> {
+    let profile = profile::resolve(profile_arg)?;
+    let session = auth::ensure_valid_token(&profile)?;
 
-    let user: User = ureq::get(&format!("https://{domain}/api/v1/users/self"))
-        .set("Authorization", &format!("Bearer {token}"))
+    let user: User = ureq::get(&format!("https://{}/api/v1/users/self", session.domain))
+        .set("Authorization", &format!("Bearer {}", session.access_token))
         .call()
         .context("request to /api/v1/users/self failed")?
         .into_json()
