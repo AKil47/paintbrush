@@ -19,6 +19,13 @@ struct Assignment {
     locked_for_user: bool,
     lock_explanation: Option<String>,
     html_url: String,
+    submission: Option<Submission>,
+}
+
+#[derive(Deserialize)]
+struct Submission {
+    workflow_state: String,
+    submitted_at: Option<String>,
 }
 
 /// Lists the published assignments in `course_id`, for `profile_arg` (or
@@ -34,6 +41,7 @@ pub fn list(profile_arg: Option<&str>, course_id: u64) -> Result<()> {
     ))
     .set("Authorization", &format!("Bearer {}", session.access_token))
     .query("per_page", "100")
+    .query("include[]", "submission")
     .call()
     .context("request to the assignments endpoint failed")?
     .into_json()
@@ -50,9 +58,14 @@ pub fn list(profile_arg: Option<&str>, course_id: u64) -> Result<()> {
         } else {
             "unlocked"
         };
+        let submission_state = assignment
+            .submission
+            .as_ref()
+            .map(|s| s.workflow_state.as_str())
+            .unwrap_or("unsubmitted");
         println!(
-            "{}\t{}\t{}\t{}\t{}",
-            assignment.id, due, lock_state, points, assignment.name
+            "{}\t{}\t{}\t{}\t{}\t{}",
+            assignment.id, due, lock_state, submission_state, points, assignment.name
         );
     }
 
@@ -79,6 +92,7 @@ pub fn view(profile_arg: Option<&str>, course_id: u64, assignment_id: u64, web: 
         session.domain
     ))
     .set("Authorization", &format!("Bearer {}", session.access_token))
+    .query("include[]", "submission")
     .call()
     .context("request to the assignment endpoint failed")?
     .into_json()
@@ -127,6 +141,16 @@ pub fn view(profile_arg: Option<&str>, course_id: u64, assignment_id: u64, web: 
             .unwrap_or_else(|| "-".to_string())
     );
     println!("url: {}", assignment.html_url);
+    match &assignment.submission {
+        Some(submission) => {
+            println!("submission_state: {}", submission.workflow_state);
+            println!(
+                "submitted_at: {}",
+                submission.submitted_at.as_deref().unwrap_or("-")
+            );
+        }
+        None => println!("submission_state: unsubmitted"),
+    }
     if let Some(description) = &assignment.description {
         println!("\ndescription:\n{description}");
     }
