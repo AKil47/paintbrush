@@ -1,10 +1,10 @@
 use anyhow::{Context, Result, bail};
 use oauth2::basic::{BasicClient, BasicTokenResponse};
+use oauth2::url::Url;
 use oauth2::{
     AuthUrl, AuthorizationCode, ClientId, ClientSecret, CsrfToken, EndpointNotSet, EndpointSet,
     RedirectUrl, RefreshToken, TokenUrl,
 };
-use oauth2::url::Url;
 
 const MOBILE_VERIFY_URL: &str = "https://sso.canvaslms.com/api/v1/mobile_verify.json";
 // Identifies us to mobile_verify as the (Student) Android app, whose OAuth
@@ -15,7 +15,8 @@ const MOBILE_USER_AGENT: &str = "candroid/8.5.0 (0)";
 
 /// A `BasicClient` with the auth and token endpoints configured — the state
 /// required by `authorize_url`, `exchange_code`, and `exchange_refresh`.
-pub type CanvasClient = BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
+pub type CanvasClient =
+    BasicClient<EndpointSet, EndpointNotSet, EndpointNotSet, EndpointNotSet, EndpointSet>;
 
 pub struct MobileVerifyResponse {
     pub client_id: String,
@@ -46,10 +47,14 @@ pub fn mobile_verify(domain: &str) -> Result<MobileVerifyResponse> {
 
     let field = |name: &str| raw.get(name).and_then(|v| v.as_str());
 
-    let (Some(client_id), Some(client_secret), Some(base_url)) =
-        (field("client_id"), field("client_secret"), field("base_url"))
-    else {
-        bail!("mobile_verify did not return OAuth credentials for {domain}; Canvas responded: {raw}");
+    let (Some(client_id), Some(client_secret), Some(base_url)) = (
+        field("client_id"),
+        field("client_secret"),
+        field("base_url"),
+    ) else {
+        bail!(
+            "mobile_verify did not return OAuth credentials for {domain}; Canvas responded: {raw}"
+        );
     };
 
     let protocol = base_url
@@ -84,11 +89,13 @@ pub fn build_client(mobile_verify: &MobileVerifyResponse, domain: &str) -> Resul
     // mobile deep link), but the `code` is still in the URL query string.
     let redirect_url = RedirectUrl::new("https://sso.canvaslms.com/canvas/login".to_string())?;
 
-    Ok(BasicClient::new(ClientId::new(mobile_verify.client_id.clone()))
-        .set_client_secret(ClientSecret::new(mobile_verify.client_secret.clone()))
-        .set_auth_uri(auth_url)
-        .set_token_uri(token_url)
-        .set_redirect_uri(redirect_url))
+    Ok(
+        BasicClient::new(ClientId::new(mobile_verify.client_id.clone()))
+            .set_client_secret(ClientSecret::new(mobile_verify.client_secret.clone()))
+            .set_auth_uri(auth_url)
+            .set_token_uri(token_url)
+            .set_redirect_uri(redirect_url),
+    )
 }
 
 /// Builds the URL the user should open in a browser to authorize this client.
@@ -117,7 +124,10 @@ pub fn exchange_code(client: &CanvasClient, code: String) -> Result<BasicTokenRe
         .context("failed to exchange authorization code for tokens")
 }
 
-pub fn exchange_refresh(client: &CanvasClient, refresh_token: String) -> Result<BasicTokenResponse> {
+pub fn exchange_refresh(
+    client: &CanvasClient,
+    refresh_token: String,
+) -> Result<BasicTokenResponse> {
     client
         .exchange_refresh_token(&RefreshToken::new(refresh_token))
         .request(&http_agent())

@@ -1,10 +1,13 @@
-use anyhow::{Context, Result};
+use std::fmt::{self, Formatter};
+
+use anyhow::Result;
 use serde::Deserialize;
 
-use crate::{auth, profile};
+use crate::client::{CanvasClient, Query};
+use crate::resource::{Loaded, Locator, Resource, ResourceManager, ResourceSpec};
 
 #[derive(Deserialize)]
-struct Course {
+pub(crate) struct Course {
     id: i64,
     name: String,
     course_code: String,
@@ -12,63 +15,126 @@ struct Course {
     default_view: Option<String>,
     start_at: Option<String>,
     end_at: Option<String>,
+    #[serde(skip)]
+    html_url: String,
 }
 
-/// Lists the logged-in user's courses for `profile_arg` (or the default
-/// profile). Each course's `id` is what future commands (e.g. listing
-/// assignments) will take to reference it.
-pub fn list(profile_arg: Option<&str>) -> Result<()> {
-    let profile = profile::resolve(profile_arg)?;
-    let session = auth::ensure_valid_token(&profile)?;
-
-    let courses: Vec<Course> = ureq::get(&format!("https://{}/api/v1/courses", session.domain))
-        .set("Authorization", &format!("Bearer {}", session.access_token))
-        .query("per_page", "100")
-        .call()
-        .context("request to /api/v1/courses failed")?
-        .into_json()
-        .context("unexpected response body from /api/v1/courses")?;
-
-    for course in courses {
-        println!("{}\t{}\t{}", course.id, course.course_code, course.name);
+impl Resource for Course {
+    fn fmt_row(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        write!(
+            formatter,
+            "{}\t{}\t{}",
+            self.id, self.course_code, self.name
+        )
     }
 
-    Ok(())
+    fn fmt_detail(&self, formatter: &mut Formatter<'_>) -> fmt::Result {
+        writeln!(formatter, "id: {}", self.id)?;
+        writeln!(formatter, "name: {}", self.name)?;
+        writeln!(formatter, "course_code: {}", self.course_code)?;
+        writeln!(formatter, "workflow_state: {}", self.workflow_state)?;
+        writeln!(
+            formatter,
+            "default_view: {}",
+            self.default_view.as_deref().unwrap_or("-")
+        )?;
+        writeln!(
+            formatter,
+            "start_at: {}",
+            self.start_at.as_deref().unwrap_or("-")
+        )?;
+        writeln!(
+            formatter,
+            "end_at: {}",
+            self.end_at.as_deref().unwrap_or("-")
+        )?;
+        write!(formatter, "url: {}", self.html_url)
+    }
 }
 
-/// Prints full details for one course, or opens it in the browser if `web`
-/// is set.
-pub fn view(profile_arg: Option<&str>, course_id: u64, web: bool) -> Result<()> {
-    let profile = profile::resolve(profile_arg)?;
-    let session = auth::ensure_valid_token(&profile)?;
+pub(crate) struct CourseLocator {
+    id: u64,
+}
 
-    let url = format!("https://{}/courses/{course_id}", session.domain);
-    if web {
-        println!("Opening {url} in your browser...");
-        return open::that(&url).context("failed to open browser");
+impl Locator<Course, CanvasClient> for CourseLocator {
+    fn resolve(self, client: &CanvasClient) -> Result<Course> {
+        let mut course: Course = client.get(&format!("/courses/{}", self.id), &Query::new())?;
+        course.html_url = client.web_url(&format!("/courses/{}", self.id));
+        Ok(course)
     }
 
-    let course: Course = ureq::get(&format!(
-        "https://{}/api/v1/courses/{course_id}",
-        session.domain
-    ))
-    .set("Authorization", &format!("Bearer {}", session.access_token))
-    .call()
-    .context("request to the course endpoint failed")?
-    .into_json()
-    .context("unexpected response body from the course endpoint")?;
+    fn web_url(&self, client: &CanvasClient) -> Result<String> {
+        Ok(client.web_url(&format!("/courses/{}", self.id)))
+    }
+}
 
-    println!("id: {}", course.id);
-    println!("name: {}", course.name);
-    println!("course_code: {}", course.course_code);
-    println!("workflow_state: {}", course.workflow_state);
-    println!(
-        "default_view: {}",
-        course.default_view.as_deref().unwrap_or("-")
-    );
-    println!("start_at: {}", course.start_at.as_deref().unwrap_or("-"));
-    println!("end_at: {}", course.end_at.as_deref().unwrap_or("-"));
-    println!("url: {url}");
+pub(crate) struct ListArgs;
 
-    Ok(())
+pub(crate) struct ViewArgs {
+    id: u64,
+}
+
+impl ViewArgs {
+    pub(crate) fn new(id: u64) -> Self {
+        Self { id }
+    }
+}
+
+pub(crate) struct CourseSpec;
+
+impl ResourceSpec<Course> for CourseSpec {
+    type Client = CanvasClient;
+    type ListArgs = ListArgs;
+    type ViewArgs = ViewArgs;
+    type ListedLocator = Loaded<CourseLocator, Course>;
+    type ViewLocator = CourseLocator;
+    type ListIter = Vec<Self::ListedLocator>;
+
+    fn list(client: &CanvasClient, _args: ListArgs) -> Result<Self::ListIter> {
+        let courses: Vec<Course> = client.get_all("/courses", &Query::new())?;
+        Ok(courses
+            .into_iter()
+            .map(|mut course| {
+                let locator = CourseLocator {
+                    id: course.id as u64,
+                };
+                course.html_url = client.web_url(&format!("/courses/{}", course.id));
+                Loaded::new(locator, course)
+            })
+            .collect())
+    }
+
+    fn locate(args: ViewArgs) -> CourseLocator {
+        CourseLocator { id: args.id }
+    }
+}
+
+pub(crate) type Manager = ResourceManager<CourseSpec, Course>;
+
+#[cfg(test)]
+mod tests {
+    use super::Course;
+    use crate::resource::Resource;
+
+    #[test]
+    fn renders_rows_and_details() {
+        let course = Course {
+            id: 42,
+            name: "Rust 101".into(),
+            course_code: "RS101".into(),
+            workflow_state: "available".into(),
+            default_view: Some("modules".into()),
+            start_at: None,
+            end_at: None,
+            html_url: "https://canvas.example/courses/42".into(),
+        };
+
+        assert_eq!(course.row().to_string(), "42\tRS101\tRust 101");
+        assert!(
+            course
+                .detail()
+                .to_string()
+                .contains("workflow_state: available")
+        );
+    }
 }

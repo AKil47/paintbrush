@@ -1,12 +1,16 @@
 mod announcement;
 mod assignment;
 mod auth;
+mod client;
 mod course;
 mod page;
 mod profile;
+mod resource;
 mod whoami;
 
 use clap::{Args, Parser, Subcommand};
+
+use resource::ViewTarget;
 
 /// paintbrush: a CLI for interacting with Canvas LMS, for humans and agents.
 #[derive(Parser)]
@@ -30,6 +34,19 @@ struct CourseScope {
     /// Course ID (see `paintbrush course list`)
     #[arg(long)]
     course: u64,
+}
+
+#[derive(Args)]
+struct ViewOptions {
+    /// Open in your browser instead of printing to the terminal.
+    #[arg(long)]
+    web: bool,
+}
+
+impl From<ViewOptions> for ViewTarget {
+    fn from(options: ViewOptions) -> Self {
+        Self::from(options.web)
+    }
 }
 
 #[derive(Subcommand)]
@@ -92,9 +109,8 @@ enum CourseCommands {
     View {
         /// Course ID (see `paintbrush course list`)
         id: u64,
-        /// Open the course in your browser instead of printing details.
-        #[arg(long)]
-        web: bool,
+        #[command(flatten)]
+        options: ViewOptions,
     },
 }
 
@@ -102,7 +118,8 @@ enum CourseCommands {
 enum AssignmentCommands {
     /// List the published assignments in a course, for the selected profile.
     ///
-    /// Prints one assignment per line as `id\tdue_at\tlock_state\tpoints_possible\tname`.
+    /// Prints one assignment per line as
+    /// `id\tdue_at\tlock_state\tsubmission_state\tpoints_possible\tname`.
     /// `lock_state` is `locked` or `unlocked`, e.g. an assignment locked until a future
     /// unlock date. Unpublished assignments are omitted.
     List {
@@ -115,9 +132,8 @@ enum AssignmentCommands {
         id: u64,
         #[command(flatten)]
         scope: CourseScope,
-        /// Open the assignment in your browser instead of printing details.
-        #[arg(long)]
-        web: bool,
+        #[command(flatten)]
+        options: ViewOptions,
     },
 }
 
@@ -139,9 +155,8 @@ enum AnnouncementCommands {
         id: u64,
         #[command(flatten)]
         scope: CourseScope,
-        /// Open the announcement in your browser instead of printing details.
-        #[arg(long)]
-        web: bool,
+        #[command(flatten)]
+        options: ViewOptions,
     },
 }
 
@@ -157,9 +172,8 @@ enum PageCommands {
     /// fresh one via Canvas's `session_token` endpoint and stores it for next
     /// time.
     View {
-        /// Open the page in your browser instead of printing its HTML.
-        #[arg(long)]
-        web: bool,
+        #[command(flatten)]
+        options: ViewOptions,
     },
 }
 
@@ -168,49 +182,63 @@ enum ProfileCommands {
     /// List configured profiles; `*` marks the default.
     List,
     /// Remove a profile and its stored credentials.
-    Remove {
-        name: String,
-    },
+    Remove { name: String },
     /// Set the default profile used when `--profile` isn't passed.
-    Default {
-        name: String,
-    },
+    Default { name: String },
 }
 
-fn main() {
-    let cli = Cli::parse();
-    let selected_profile = cli.profile.as_deref();
+fn run(cli: Cli) -> anyhow::Result<()> {
+    let Cli { profile, command } = cli;
+    let selected_profile = profile.as_deref();
 
-    let result = match cli.command {
+    match command {
         Commands::Login { domain } => auth::login(selected_profile, &domain),
         Commands::Whoami => whoami::whoami(selected_profile),
-        Commands::Course { command } => match command {
-            CourseCommands::List => course::list(selected_profile),
-            CourseCommands::View { id, web } => course::view(selected_profile, id, web),
-        },
-        Commands::Assignment { command } => match command {
-            AssignmentCommands::List { scope } => assignment::list(selected_profile, scope.course),
-            AssignmentCommands::View { id, scope, web } => {
-                assignment::view(selected_profile, scope.course, id, web)
+        Commands::Course { command } => {
+            let manager = course::Manager::connect(selected_profile)?;
+            match command {
+                CourseCommands::List => manager.list(course::ListArgs),
+                CourseCommands::View { id, options } => {
+                    manager.view(course::ViewArgs::new(id), options.into())
+                }
             }
-        },
-        Commands::Announcement { command } => match command {
-            AnnouncementCommands::List { scope } => announcement::list(selected_profile, scope.course),
-            AnnouncementCommands::View { id, scope, web } => {
-                announcement::view(selected_profile, scope.course, id, web)
+        }
+        Commands::Assignment { command } => {
+            let manager = assignment::Manager::connect(selected_profile)?;
+            match command {
+                AssignmentCommands::List { scope } => {
+                    manager.list(assignment::ListArgs::new(scope.course))
+                }
+                AssignmentCommands::View { id, scope, options } => {
+                    manager.view(assignment::ViewArgs::new(scope.course, id), options.into())
+                }
             }
-        },
+        }
+        Commands::Announcement { command } => {
+            let manager = announcement::Manager::connect(selected_profile)?;
+            match command {
+                AnnouncementCommands::List { scope } => {
+                    manager.list(announcement::ListArgs::new(scope.course))
+                }
+                AnnouncementCommands::View { id, scope, options } => manager.view(
+                    announcement::ViewArgs::new(scope.course, id),
+                    options.into(),
+                ),
+            }
+        }
         Commands::Page { url, command } => match command {
-            PageCommands::View { web } => page::view(selected_profile, &url, web),
+            PageCommands::View { options } => page::view(selected_profile, &url, options.web),
         },
         Commands::Profile { command } => match command {
             ProfileCommands::List => profile::list(),
             ProfileCommands::Remove { name } => profile::remove(&name),
             ProfileCommands::Default { name } => profile::set_default(&name),
         },
-    };
+    }
+}
 
-    if let Err(err) = result {
+fn main() {
+    if let Err(err) = run(Cli::parse()) {
         eprintln!("Error: {err:?}");
         std::process::exit(1);
     }
