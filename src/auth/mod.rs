@@ -168,7 +168,10 @@ pub fn fetch_html(profile: &str, target_url: &str) -> Result<String> {
     establish_web_session(&agent, &session, target_url)?;
 
     let html = try_fetch(&agent, target_url, &session.domain)?.ok_or_else(|| {
-        anyhow::anyhow!("still redirected off {} after establishing a session", session.domain)
+        anyhow::anyhow!(
+            "still redirected off {} after establishing a session",
+            session.domain
+        )
     })?;
     save_cookie_store(profile, &agent)?;
     Ok(html)
@@ -224,8 +227,9 @@ fn load_cookie_store(profile: &str) -> Result<cookie_store::CookieStore> {
         // Canvas's session cookie is non-persistent (no Expires attribute) —
         // `load_all` (paired with `save_incl_expired_and_nonpersistent` below)
         // is what keeps it around across separate CLI invocations.
-        Some(json) => cookie_store::serde::json::load_all(json.as_bytes())
-            .map_err(|e| anyhow::anyhow!("stored cookies are corrupt ({e}); run `paintbrush login` again")),
+        Some(json) => cookie_store::serde::json::load_all(json.as_bytes()).map_err(|e| {
+            anyhow::anyhow!("stored cookies are corrupt ({e}); run `paintbrush login` again")
+        }),
         None => Ok(cookie_store::CookieStore::default()),
     }
 }
