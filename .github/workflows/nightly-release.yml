@@ -29,15 +29,6 @@ jobs:
       - name: Build release binary
         run: cargo build --release
 
-      - name: Package Windows binary
-        shell: pwsh
-        run: |
-          $artifact = "paintbrush-windows-x86_64.zip"
-          Compress-Archive `
-            -Path "target\release\paintbrush.exe" `
-            -DestinationPath $artifact `
-            -Force
-
       - name: Replace nightly release
         shell: pwsh
         env:
@@ -55,7 +46,7 @@ jobs:
           }
 
           gh release create nightly `
-            "paintbrush-windows-x86_64.zip" `
+            "target\release\paintbrush.exe#paintbrush.exe" `
             --target "${{ github.sha }}" `
             --title "Nightly" `
             --notes "Automated nightly build from ${{ github.sha }}." `
