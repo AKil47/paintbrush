@@ -1,0 +1,64 @@
+name: Nightly Release
+
+on:
+  push:
+    branches:
+      - main
+    paths:
+      - ".github/workflows/nightly-release.yml"
+      - "Cargo.lock"
+      - "Cargo.toml"
+      - "src/**"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  nightly-release:
+    name: Build and publish nightly
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Build release binary
+        run: cargo build --release
+
+      - name: Package Windows binary
+        shell: pwsh
+        run: |
+          $artifact = "paintbrush-windows-x86_64.zip"
+          Compress-Archive `
+            -Path "target\release\paintbrush.exe" `
+            -DestinationPath $artifact `
+            -Force
+
+      - name: Replace nightly release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if (Get-Variable PSNativeCommandUseErrorActionPreference -ErrorAction SilentlyContinue) {
+            $PSNativeCommandUseErrorActionPreference = $false
+          }
+
+          gh release view nightly 1>$null 2>$null
+          if ($LASTEXITCODE -eq 0) {
+            gh release delete nightly --cleanup-tag -y
+          } else {
+            Write-Host "No existing nightly release found."
+          }
+
+          gh release create nightly `
+            "paintbrush-windows-x86_64.zip" `
+            --target "${{ github.sha }}" `
+            --title "Nightly" `
+            --notes "Automated nightly build from ${{ github.sha }}." `
+            --prerelease
