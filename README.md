@@ -41,3 +41,16 @@ git submodule update --init --recursive
 ```sh
 cargo build
 ```
+
+## Opening Canvas resources
+
+When a user asks an agent to open a Canvas resource in their browser, pass
+`--web` to the resource's `view` command. The command opens the user's default
+browser; returning the URL alone is not the browser-opening action.
+
+```sh
+paintbrush assignment view ASSIGNMENT_ID --course COURSE_ID --web
+paintbrush announcement view ANNOUNCEMENT_ID --course COURSE_ID --web
+paintbrush course view COURSE_ID --web
+paintbrush page https://canvas.example/courses/COURSE_ID/quizzes/QUIZ_ID view --web
+```

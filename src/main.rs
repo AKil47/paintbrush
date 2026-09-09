@@ -14,7 +14,10 @@ use resource::ViewTarget;
 
 /// paintbrush: a CLI for interacting with Canvas LMS, for humans and agents.
 #[derive(Parser)]
-#[command(version)]
+#[command(
+    version,
+    after_help = "When the user asks to open a Canvas resource in a browser, use the resource's `view --web` command. `--web` opens the user's default browser; do not merely return the URL."
+)]
 struct Cli {
     /// Profile to use for this command. Defaults to the default profile —
     /// see `paintbrush profile list` and `paintbrush profile default`.
@@ -38,7 +41,10 @@ struct CourseScope {
 
 #[derive(Args)]
 struct ViewOptions {
-    /// Open in your browser instead of printing to the terminal.
+    /// Open in your browser instead of printing to the terminal. Use this when
+    /// the user asks to open or view a Canvas resource in their browser; do not
+    /// merely return the URL. For example: `paintbrush assignment view 123
+    /// --course 456 --web` or `paintbrush page <url> view --web`.
     #[arg(long)]
     web: bool,
 }
@@ -127,6 +133,10 @@ enum AssignmentCommands {
         scope: CourseScope,
     },
     /// Show full details for an assignment, for the selected profile.
+    ///
+    /// Add `--web` to open the assignment in the user's browser. This performs
+    /// the browser action; it is not necessary to give the user the URL for
+    /// them to open manually.
     View {
         /// Assignment ID (see `paintbrush assignment list`)
         id: u64,
@@ -150,6 +160,8 @@ enum AnnouncementCommands {
         scope: CourseScope,
     },
     /// Show full details for an announcement, for the selected profile.
+    ///
+    /// Add `--web` to open the announcement in the user's browser.
     View {
         /// Announcement ID (see `paintbrush announcement list`)
         id: u64,
